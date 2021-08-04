@@ -5,8 +5,10 @@
 // many items are left in the iterator.
 
 use std::iter::{DoubleEndedIterator, ExactSizeIterator, Iterator};
+use std::marker::PhantomData;
 
 use crate::variant::Variant;
+use crate::FromVariant;
 
 /// Iterator over items in a variant.
 #[derive(Debug)]
@@ -59,6 +61,59 @@ impl DoubleEndedIterator for VariantIter {
 
 impl ExactSizeIterator for VariantIter {}
 
+/// Iterator over items in a variant.
+#[derive(Debug)]
+pub struct VariantGetIter<T: FromVariant> {
+    variant: Variant,
+    head: usize,
+    tail: usize,
+    _v: PhantomData<T>,
+}
+
+impl<T: FromVariant> VariantGetIter<T> {
+    pub(crate) fn new(variant: Variant) -> Self {
+        let tail = variant.n_children();
+        Self {
+            variant,
+            head: 0,
+            tail,
+            _v: Default::default(),
+        }
+    }
+}
+
+impl<T: FromVariant> Iterator for VariantGetIter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        if self.head == self.tail {
+            None
+        } else {
+            let value = self.variant.child_value(self.head).get().unwrap();
+            self.head += 1;
+            Some(value)
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = self.tail - self.head;
+        (size, Some(size))
+    }
+}
+
+impl<T: FromVariant> DoubleEndedIterator for VariantGetIter<T> {
+    fn next_back(&mut self) -> Option<T> {
+        if self.head == self.tail {
+            None
+        } else {
+            self.tail -= 1;
+            Some(self.variant.child_value(self.tail).get().unwrap())
+        }
+    }
+}
+
+impl<T: FromVariant> ExactSizeIterator for VariantGetIter<T> {}
+
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
@@ -79,7 +134,10 @@ mod tests {
             "bar".to_string().to_variant(),
         ]);
         let vec: Vec<String> = v.iter().map(|i| i.get().unwrap()).collect();
-        assert_eq!(vec, vec!["foo".to_string(), "bar".to_string()]);
+        let a = vec!["foo".to_string(), "bar".to_string()];
+        assert_eq!(&vec, &a);
+        let vec: Vec<String> = v.array_iter().unwrap().collect();
+        assert_eq!(&vec, &a);
     }
 
     #[test]
@@ -106,5 +164,6 @@ mod tests {
         map.insert("bar", 1);
         let v = map.to_variant();
         assert_eq!(v.iter().count(), 2);
+        assert_eq!(v.array_iter::<(String, i32)>().unwrap().count(), 2);
     }
 }

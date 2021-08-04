@@ -88,9 +88,9 @@ use crate::gstring::GString;
 use crate::translate::*;
 use crate::StaticType;
 use crate::Type;
-use crate::VariantIter;
 use crate::VariantTy;
 use crate::VariantType;
+use crate::{VariantGetIter, VariantIter};
 use std::borrow::Cow;
 use std::cmp::{Eq, Ordering, PartialEq, PartialOrd};
 use std::collections::HashMap;
@@ -391,10 +391,49 @@ impl Variant {
     }
 
     /// Create an iterator over items in the variant.
+    ///
+    /// Note that this heap allocates a variant for each element,
+    /// which can be particularly expensive for large arrays.
     pub fn iter(&self) -> VariantIter {
         assert!(self.is_container());
 
         VariantIter::new(self.clone())
+    }
+
+    /// Create an iterator over items from an array type variant.
+    ///
+    /// This will fail if the variant is not an array of with
+    /// the expected child type.
+    /// 
+    /// A benefit of this API over [`Self::iter()`] is that it
+    /// avoids allocating a Rust type (e.g. `Vec<T>` for the container).
+    /// Currently, it does heap allocate an intermediate C-level `GVariant`
+    /// for each element, but this will likely be fixed in the future
+    /// for basic types such as `u` (i.e. `u32`).
+    ///
+    /// ```
+    /// # use glib::prelude::*;
+    /// let strs = &["foo", "bar"];
+    /// let strs_variant: glib::Variant = strs.to_variant();
+    /// for s in strs_variant.array_iter::<String>()? {
+    ///     println!("{}", s);
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn array_iter<T: FromVariant + StaticVariantType>(
+        &self,
+    ) -> Result<VariantGetIter<T>, VariantTypeMismatchError> {
+        let child_ty = &*T::static_variant_type();
+        let actual_ty = self.type_();
+        let expected_ty = child_ty.with_array();
+        if actual_ty != &expected_ty {
+            return Err(VariantTypeMismatchError {
+                actual: actual_ty.to_owned(),
+                expected: expected_ty,
+            });
+        }
+
+        Ok(VariantGetIter::new(self.clone()))
     }
 
     /// Variant has a container type.
@@ -642,12 +681,7 @@ impl<T: StaticVariantType + FromVariant> FromVariant for Option<T> {
 
 impl<T: StaticVariantType> StaticVariantType for [T] {
     fn static_variant_type() -> Cow<'static, VariantTy> {
-        let child_type = T::static_variant_type();
-        let signature = format!("a{}", child_type.to_str());
-
-        VariantType::new(&signature)
-            .expect("incorrect signature")
-            .into()
+        T::static_variant_type().with_array().into()
     }
 }
 
